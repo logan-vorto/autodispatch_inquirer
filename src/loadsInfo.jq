@@ -1,4 +1,4 @@
-include "./funcs";
+include "./src/funcs";
 
 def getTodaysDrivers(date): [
     if . == null then
@@ -14,7 +14,13 @@ def getTodaysDrivers(date): [
                 if .StartTime != null then
                     (.StartTime | ourTimeToEpoch) as $shift_start |
                     if $shift_start != null and $shift_start == date then
-                        $driver
+                        if .Standby and .AlreadyCompletedLoad then
+                            $driver
+                        elif .Standby == false then
+                            $driver
+                        else
+                            empty
+                        end
                     else
                         empty
                     end
@@ -66,17 +72,34 @@ def getDaily:
         .[] | # for each day
         {
             shortDate: .[0].shortDate,
+            # list of unique driver ids for the day
             allDriverIDs: [ .[] | .driversForToday ] | add | unique,
+            # list of unique load ids that were seen as unassigned and ready for the day
             allReadiedLoadIDs: [ .[] | .unassignedReadiedLoadCountForDate ] | add | unique,
+            # list of unique load ids that were seen as assigned to a driver for the day
             allAssignedLoadIDs: [ .[] | .driverAssignedLoad ] | add | unique,
+            # list of unique load ids that were seen as either unassigned+ready and/or assigned to a driver for the day (may have overlap with the other lists)
+            allReadyAndAssignedLoadIDs: [ .[] | .unassignedReadiedLoadCountForDate + .driverAssignedLoad ] | add | unique,
+            # list of unique load ids that were seen today as either unassigned, unassigned+ready, or assigned to a driver for the day (may have overlap with the other lists)
+            allTodayLoadIDs: [ .[] | .unassignedReadiedLoadCountForDate + .driverAssignedLoad + .unassignedLoadsForDate ] | add | unique,
+            # list of unique load ids that were seen as unassigned and never ready and never assigned
+            allUnassignedNeverReadyNeverAssignedIDs: [ .[] | .unassignedLoadsForDate - .unassignedReadiedLoadCountForDate - .driverAssignedLoad ] | add | unique,
+            # list of unique load ids that were seen as unassigned and not ready for the day (may have overlap with the readied list)
             allUnassignedLoadIDs: [ .[] | .unassignedLoadsForDate ] | add | unique,
-            carryoverLoads: [ .[] | .carryOverLoadsForDate ] | add | unique
+            # list of unique load ids that are unassigned today with a start window time before today (unbounded carryover)
+            carryoverLoads: [ .[] | .carryOverLoadsForDate ] | add | unique,
+            # list of unique load ids that are unassigned today with a start window time in the previous day (will have overlap with carryover list)
+            priorDayLoads: [ .[] | .carryOverLoadsOnlyPreviousDay ] | add | unique
         } |
         .allDriverCount = (.allDriverIDs | length) |
         .allReadiedLoadCount = (.allReadiedLoadIDs | length) |
-        .allUnassignedLoadIDCount = (.allUnassignedLoadIDs | length) |
         .allAssignedLoadCount = (.allAssignedLoadIDs | length) |
-        .allCarryoverLoadCount = (.carryoverLoads | length)
+        .allReadyAndAssignedLoadCount = (.allReadyAndAssignedLoadIDs | length) |
+        .allTodayLoadCount = (.allTodayLoadIDs | length) |
+        .allUnassignedLoadCount = (.allUnassignedLoadIDs | length) |
+        .allUnassignedNeverReadyNeverAssignedCount = (.allUnassignedNeverReadyNeverAssignedIDs | length) |
+        .allCarryoverLoadCount = (.carryoverLoads | length) |
+        .allPriorDayLoadCount = (.priorDayLoads | length)
     ]
 ;
 
@@ -139,6 +162,22 @@ def processRow:
                 if .Stops.[0].ArrivalWindowStartTime != null then
                     (.Stops.[0].ArrivalWindowStartTime | ourTimeToEpoch) as $load_time |
                     if $load_time < $ad_created then 
+                        .ID
+                    else 
+                        empty 
+                    end
+                else
+                    debug("load \(.ID) has no start time") |
+                    empty
+                end
+            ],
+        carryOverLoadsOnlyPreviousDay:
+            .input_payload.UnassignedLoads |
+            [ 
+                .[] | # for each load
+                if .Stops.[0].ArrivalWindowStartTime != null then
+                    (.Stops.[0].ArrivalWindowStartTime | ourTimeToEpoch) as $load_time |
+                    if $load_time == ($ad_created | oneDayBefore) then 
                         .ID
                     else 
                         empty 

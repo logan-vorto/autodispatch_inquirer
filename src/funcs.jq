@@ -8,3 +8,8 @@ def ourTimeToEpoch:
 def getHour:
     capture("(?<hour>[0-9]{2}):[0-9]{2}:[0-9]") |
     .hour;
+
+# takes in an epoch time in seconds and returns 24 hours prior to that 
+def oneDayBefore:
+    . - (60 * 60 * 24);
+    
