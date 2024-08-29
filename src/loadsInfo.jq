@@ -67,36 +67,49 @@ def getDriverLoadsForToday(date):
 
 # builds unique list and counts of various fields pulled from the AD input payload
 def getDaily:
-    group_by(.shortDate) |
+    group_by(.shortDate) | # adjust this based on time grouping desires
+    # group_by("\(.shortDate) \(.hour):\(.minute)") | # adjust this based on time grouping desires
     [
         .[] | # for each day
         {
             shortDate: .[0].shortDate,
+            hour: .[0].hour,
+            minute: .[0].minute,
             # list of unique driver ids for the day
             allDriverIDs: [ .[] | .driversForToday ] | add | unique,
-            # list of unique load ids that were seen as unassigned and ready for the day
-            allReadiedLoadIDs: [ .[] | .unassignedReadiedLoadCountForDate ] | add | unique,
-            # list of unique load ids that were seen as assigned to a driver for the day
-            allAssignedLoadIDs: [ .[] | .driverAssignedLoad ] | add | unique,
-            # list of unique load ids that were seen as either unassigned+ready and/or assigned to a driver for the day (may have overlap with the other lists)
-            allReadyAndAssignedLoadIDs: [ .[] | .unassignedReadiedLoadCountForDate + .driverAssignedLoad ] | add | unique,
-            # list of unique load ids that were seen today as either unassigned, unassigned+ready, or assigned to a driver for the day (may have overlap with the other lists)
-            allTodayLoadIDs: [ .[] | .unassignedReadiedLoadCountForDate + .driverAssignedLoad + .unassignedLoadsForDate ] | add | unique,
-            # list of unique load ids that were seen as unassigned and never ready and never assigned
-            allUnassignedNeverReadyNeverAssignedIDs: [ .[] | .unassignedLoadsForDate - .unassignedReadiedLoadCountForDate - .driverAssignedLoad ] | add | unique,
             # list of unique load ids that were seen as unassigned and not ready for the day (may have overlap with the readied list)
             allUnassignedLoadIDs: [ .[] | .unassignedLoadsForDate ] | add | unique,
+            # list of unique load ids that were seen as unassigned and ready for the day
+            allReadiedLoadIDs: [ .[] | .unassignedReadiedLoadForDate ] | add | unique,
+            # list of unique load ids that were seen as assigned to a driver for the day
+            allAssignedLoadIDs: [ .[] | .driverAssignedLoad ] | add | unique,
+            # list of unique load ids that were seen today as either unassigned, unassigned+ready, or assigned to a driver for the day (may have overlap with the other lists)
+            allTodayLoadIDs: [ .[] | .unassignedLoadsForDate + .unassignedReadiedLoadForDate + .driverAssignedLoad ] | add | unique,
+            # list of unique load ids that were seen as either unassigned+ready and/or assigned to a driver for the day (may have overlap with the other lists)
+            allReadyAndAssignedLoadIDs: [ .[] | .unassignedReadiedLoadForDate + .driverAssignedLoad ] | add | unique,
+            # list of unique load ids that were seen as ready and never assigned to a driver for the day
+            allReadyAndNotAssignedLoadIDs: (
+                ([ .[] | .unassignedReadiedLoadForDate ] | add) -
+                ([ .[] | .driverAssignedLoad ] | add) | unique
+            ),
+            # list of unique load ids that were seen as unassigned and never ready and never assigned
+            allUnassignedNeverReadyNeverAssignedIDs: (
+                ([ .[] | .unassignedLoadsForDate ] | add) -
+                ([ .[] | .unassignedReadiedLoadForDate ] | add) -
+                ([ .[] | .driverAssignedLoad ] | add) | unique
+            ),
             # list of unique load ids that are unassigned today with a start window time before today (unbounded carryover)
             carryoverLoads: [ .[] | .carryOverLoadsForDate ] | add | unique,
             # list of unique load ids that are unassigned today with a start window time in the previous day (will have overlap with carryover list)
             priorDayLoads: [ .[] | .carryOverLoadsOnlyPreviousDay ] | add | unique
         } |
         .allDriverCount = (.allDriverIDs | length) |
+        .allUnassignedLoadCount = (.allUnassignedLoadIDs | length) |
         .allReadiedLoadCount = (.allReadiedLoadIDs | length) |
         .allAssignedLoadCount = (.allAssignedLoadIDs | length) |
-        .allReadyAndAssignedLoadCount = (.allReadyAndAssignedLoadIDs | length) |
         .allTodayLoadCount = (.allTodayLoadIDs | length) |
-        .allUnassignedLoadCount = (.allUnassignedLoadIDs | length) |
+        .allReadyAndAssignedLoadCount = (.allReadyAndAssignedLoadIDs | length) |
+        .allReadyAndNotAssignedLoadCount = (.allReadyAndNotAssignedLoadIDs | length) |
         .allUnassignedNeverReadyNeverAssignedCount = (.allUnassignedNeverReadyNeverAssignedIDs | length) |
         .allCarryoverLoadCount = (.carryoverLoads | length) |
         .allPriorDayLoadCount = (.priorDayLoads | length)
@@ -113,7 +126,8 @@ def processRow:
     {
         poolID: .pool_id,
         shortDate: $ad_created | strftime("%F"),
-        hour: .created_at | getHour,
+        hour: .created_at | getRoundedHour,
+        minute: .created_at | getRoundedMinute,
         adInputDate: .created_at,
         driversForToday: .input_payload.Drivers | 
             getTodaysDrivers($ad_created) |
@@ -139,7 +153,7 @@ def processRow:
                     empty
                 end
             ],
-        unassignedReadiedLoadCountForDate: 
+        unassignedReadiedLoadForDate: 
             .input_payload.UnassignedLoads | 
             [ 
                 .[] | # for each load
@@ -204,6 +218,8 @@ if type == "array" then
     ] |
     sort_by(.adInputDate) |
     getDaily
+elif type == "object" then
+    processRow
 else
     "unable to process input that is not array"
 end
